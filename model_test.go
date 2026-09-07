@@ -47,6 +47,11 @@ func TestResolveProfile(t *testing.T) {
 		transport TransportKind
 		auth      AuthMethod
 		want      Profile
+		// wantHost overrides the expected HostType. The OpenAI/ChatGPT family
+		// shares a single declaration per transport, so resolveProfile must
+		// relabel it to the requested host (ProfileOpenAIHTTP is labeled
+		// HostOpenAI and ProfileOpenAITunnel HostChatGPT).
+		wantHost HostType
 	}{
 		{
 			name:      "openai over openai tunnel",
@@ -54,6 +59,7 @@ func TestResolveProfile(t *testing.T) {
 			transport: TransportOpenAI,
 			auth:      AuthNone,
 			want:      ProfileOpenAITunnel,
+			wantHost: HostOpenAI,
 		},
 		{
 			name:      "chatgpt over openai tunnel",
@@ -75,6 +81,7 @@ func TestResolveProfile(t *testing.T) {
 			transport: TransportHTTP,
 			auth:      AuthOAuth,
 			want:      ProfileOpenAIHTTP,
+			wantHost: HostChatGPT,
 		},
 		{
 			name:      "grok over http",
@@ -137,11 +144,37 @@ func TestResolveProfile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := resolveProfile(tt.host, tt.transport, tt.auth)
-			require.Equal(t, tt.want.HostType, got.HostType)
+			wantHost := tt.wantHost
+			if wantHost == "" {
+				wantHost = tt.want.HostType
+			}
+			require.Equal(t, wantHost, got.HostType)
 			require.Equal(t, tt.want.Transport, got.Transport)
 			require.Equal(t, tt.want.AuthMethod, got.AuthMethod)
 			require.Equal(t, tt.want.Remote, got.Remote)
 			require.Equal(t, tt.want.Features, got.Features)
+		})
+	}
+}
+
+// TestResolveProfile_OpenAIHostIdentity pins that the resolved profile keeps
+// the requested OpenAI/ChatGPT host identity on every transport, instead of
+// inheriting the label baked into the shared OpenAI-family declarations.
+func TestResolveProfile_OpenAIHostIdentity(t *testing.T) {
+	cases := []struct {
+		name      string
+		host      HostType
+		transport TransportKind
+	}{
+		{name: "chatgpt over http", host: HostChatGPT, transport: TransportHTTP},
+		{name: "openai over http", host: HostOpenAI, transport: TransportHTTP},
+		{name: "chatgpt over tunnel", host: HostChatGPT, transport: TransportOpenAI},
+		{name: "openai over tunnel", host: HostOpenAI, transport: TransportOpenAI},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveProfile(tc.host, tc.transport, AuthNone)
+			require.Equal(t, tc.host, got.HostType)
 		})
 	}
 }

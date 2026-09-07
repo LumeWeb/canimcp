@@ -270,40 +270,64 @@ func ProfileForTransport(t TransportKind) Profile {
 }
 
 // resolveProfile looks up the pre-declared profile for a HostType +
-// Transport pair. It returns the best matching static profile; the
-// caller overlays runtime signals (headers, tokenInfo, etc.) afterward.
+// Transport pair. It returns a value copy (never the shared static
+// profile) of the best matching declaration, with the requested host's
+// identity and, for known reachable HTTP hosts, the actual wire auth
+// overlaid. Runtime wire signals (headers, tokenInfo, etc.) are layered
+// on by the caller afterward.
 func resolveProfile(host HostType, transport TransportKind, auth AuthMethod) Profile {
-	// An aliased host reuses its target's static declaration but keeps its own
-	// HostType. resolveProfile returns a value copy (never the shared static
-	// profile), so overriding HostType here cannot corrupt the target profile.
+	// An aliased host reuses its target's static declaration but keeps its
+	// own HostType (see profileAliasTargets).
 	if base, ok := profileAliasTargets[host]; ok {
 		p := resolveProfile(base, transport, auth)
 		p.HostType = host
 		return p
 	}
 
+	var p Profile
 	switch {
 	case (host == HostOpenAI || host == HostChatGPT) && transport == TransportOpenAI:
-		return ProfileOpenAITunnel
+		p = ProfileOpenAITunnel
 	case (host == HostOpenAI || host == HostChatGPT) && transport == TransportHTTP:
-		return ProfileOpenAIHTTP
+		p = ProfileOpenAIHTTP
 	case host == HostGrok && transport == TransportHTTP:
-		return ProfileGrokHTTP
+		p = ProfileGrokHTTP
 	case host == HostGrok && transport == TransportStdio:
-		return ProfileGrokStdio
+		p = ProfileGrokStdio
 	case host == HostClaude && transport == TransportHTTP:
-		return ProfileClaudeHTTP
+		p = ProfileClaudeHTTP
 	case host == HostStdioApps && transport == TransportStdio:
-		return ProfileStdioMCPApps
+		p = ProfileStdioMCPApps
 	case transport == TransportStdio:
-		return ProfileStdioGeneric
+		p = ProfileStdioGeneric
 	case transport == TransportHTTP:
-		return ProfileHTTPGeneric
+		p = ProfileHTTPGeneric
 	case transport == TransportOpenAI:
-		return ProfileOpenAITunnel
+		p = ProfileOpenAITunnel
 	default:
 		// Unknown transport: degrade to stdio generic. This is safer
 		// than HTTP generic because stdio touches no network.
-		return ProfileStdioGeneric
+		p = ProfileStdioGeneric
 	}
+
+	// Keep the resolved profile's HostType in step with the requested host:
+	// the OpenAI/ChatGPT family shares a declaration per transport, so a
+	// ChatGPT-over-HTTP request must not be labeled HostOpenAI (the reverse
+	// of the HostType assigned by the shared ProfileOpenAIHTTP /
+	// ProfileOpenAITunnel declarations).
+	if host != HostUnknown {
+		p.HostType = host
+	}
+
+	// auth carries the detected wire auth. Overlay it for reachable HTTP
+	// hosts so the returned AuthMethod reports actual wire auth rather than
+	// the static default. HostUnknown keeps the static declaration (there is
+	// no trusted wire auth signal for an unidentified host), and stdio and
+	// the OpenAI tunnel keep their static value — notably AuthNone, so a
+	// token can never flip a tunnel profile to OAuth/bearer.
+	if host != HostUnknown && transport == TransportHTTP {
+		p.AuthMethod = auth
+	}
+
+	return p
 }
