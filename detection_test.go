@@ -1714,7 +1714,11 @@ func TestRegistry_Detect_OpenAITunnelKeepsAuthNoneWithToken(t *testing.T) {
 	}
 	prof := r.Detect(req)
 
-	require.Equal(t, ProfileOpenAITunnel.HostType, prof.HostType)
+	// The openai-mcp UA identifies the OpenAI client, so the resolved
+	// profile keeps HostOpenAI even though the tunnel's static declaration
+	// is labeled HostChatGPT (host identity is held separate from the
+	// shared OpenAI-family declaration; see resolveProfile).
+	require.Equal(t, HostOpenAI, prof.HostType)
 	require.Equal(t, TransportOpenAI, prof.Transport)
 	require.Equal(t, AuthNone, prof.AuthMethod, "secure tunnel must keep AuthNone regardless of a wire token")
 	// The token itself is still surfaced on the profile.
