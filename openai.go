@@ -37,10 +37,14 @@ func (openAIDetector) Match(req Evidence) (HostType, AuthMethod) {
 			return HostOpenAI, authFromToken(req.TokenInfo)
 		}
 	}
-	// Check for OpenAI-specific HTTP headers.
+	// Check for OpenAI-specific HTTP headers. Headers alone only identify
+	// the host — auth must come from the wire token. The header map is
+	// fully attacker-controlled in DetectFromHTTPRequest, so a bare header
+	// can never claim AuthOAuth (Bearer when TokenInfo is nil, the same
+	// rule all other detection paths use).
 	if req.Headers != nil {
 		if req.Headers.Get(headerOpenAISession) != "" || req.Headers.Get(headerOpenAISubject) != "" {
-			return HostOpenAI, AuthOAuth
+			return HostOpenAI, authFromToken(req.TokenInfo)
 		}
 	}
 	return HostUnknown, ""

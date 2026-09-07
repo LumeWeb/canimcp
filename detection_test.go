@@ -51,20 +51,32 @@ func TestOpenAIDetector_MatchByClientInfo(t *testing.T) {
 func TestOpenAIDetector_MatchByHeaders(t *testing.T) {
 	d := openAIDetector{}
 
-	// Positive: X-Openai-Session header present
+	// Positive: X-Openai-Session header present, no token — the header map
+	// is attacker-controlled, so a bare header identifies the host but can
+	// never claim OAuth: auth degrades to Bearer like every other path.
 	h := http.Header{}
 	h.Set("X-Openai-Session", "sess-123")
 	host, auth := d.Match(Evidence{
 		Headers: h,
 	})
 	require.Equal(t, HostOpenAI, host)
-	require.Equal(t, AuthOAuth, auth)
+	require.Equal(t, AuthBearer, auth)
 
-	// Positive: X-Openai-Subject header present
+	// Positive: X-Openai-Subject header present, tokenless
 	h2 := http.Header{}
 	h2.Set("X-Openai-Subject", "user-abc")
 	host, auth = d.Match(Evidence{
 		Headers: h2,
+	})
+	require.Equal(t, HostOpenAI, host)
+	require.Equal(t, AuthBearer, auth)
+
+	// Positive: header plus a real wire token resolves to OAuth
+	h3 := http.Header{}
+	h3.Set("X-Openai-Session", "sess-123")
+	host, auth = d.Match(Evidence{
+		Headers:   h3,
+		TokenInfo: newTokenInfo(),
 	})
 	require.Equal(t, HostOpenAI, host)
 	require.Equal(t, AuthOAuth, auth)
