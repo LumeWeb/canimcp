@@ -113,6 +113,21 @@ var ProfileClaudeHTTP = newProfile(
 	HostClaude, TransportHTTP, AuthOAuth, true,
 )
 
+// ProfileManufactHTTP is the Manufact Cloud dashboard client (manufact.com,
+// built on mcp-use) connecting over HTTP + bearer auth. It negotiates MCP
+// Apps UI (io.modelcontextprotocol/ui extension with
+// text/html;profile=mcp-app) and form/URL elicitation on the wire, so both
+// capability features are declared statically. It sends no OpenAI-style file
+// references and has shown no separate url/data relay path, so no source
+// mechanism features beyond the transport-derived set are declared.
+var ProfileManufactHTTP = newProfile(
+	FeatureSet{
+		FeatMCPApps:     true,
+		FeatElicitation: true,
+	},
+	HostManufact, TransportHTTP, AuthBearer, true,
+)
+
 // ProfileStdioMCPApps is the generic profile for a co-located stdio client
 // that also renders MCP Apps UI. It is the shared declaration (alias target)
 // for every concrete stdio host that presents exactly this surface — Claude
@@ -296,6 +311,8 @@ func resolveProfile(host HostType, transport TransportKind, auth AuthMethod) Pro
 		p = ProfileGrokStdio
 	case host == HostClaude && transport == TransportHTTP:
 		p = ProfileClaudeHTTP
+	case host == HostManufact && transport == TransportHTTP:
+		p = ProfileManufactHTTP
 	case host == HostStdioApps && transport == TransportStdio:
 		p = ProfileStdioMCPApps
 	case transport == TransportStdio:

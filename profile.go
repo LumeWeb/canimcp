@@ -35,6 +35,7 @@ const (
 	HostKimi        HostType = "kimi"
 	HostZed         HostType = "zed"
 	HostFX          HostType = "fx"
+	HostManufact    HostType = "manufact"
 	HostGeneric     HostType = "generic"
 )
 
