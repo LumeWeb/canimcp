@@ -417,6 +417,65 @@ func TestAiderDeskDetector_NoMatch(t *testing.T) {
 	require.Equal(t, AuthMethod(""), auth)
 }
 
+func TestManufactDetector_MatchByClientInfo(t *testing.T) {
+	d := manufactDetector{}
+
+	// Positive: remote HTTP with Manufact Cloud clientInfo name. No token →
+	// wire auth is bearer.
+	host, auth := d.Match(Evidence{
+		ClientInfo: &ClientInfo{Name: "Manufact Cloud", Version: "2"},
+	})
+	require.Equal(t, HostManufact, host)
+	require.Equal(t, AuthBearer, auth)
+
+	// Positive: case-insensitive name match.
+	host, auth = d.Match(Evidence{
+		ClientInfo: &ClientInfo{Name: "manufact cloud", Version: "2"},
+	})
+	require.Equal(t, HostManufact, host)
+	require.Equal(t, AuthBearer, auth)
+
+	// Positive: token present → OAuth wire auth.
+	host, auth = d.Match(Evidence{
+		ClientInfo: &ClientInfo{Name: "Manufact Cloud", Version: "2"},
+		TokenInfo:  &TokenInfo{UserID: "4"},
+	})
+	require.Equal(t, HostManufact, host)
+	require.Equal(t, AuthOAuth, auth)
+
+	// Negative: wrong clientInfo name (a bare "manufact" substring must not
+	// match — the detector matches the full product token exactly).
+	host, auth = d.Match(Evidence{
+		ClientInfo: &ClientInfo{Name: "manufact-only-client"},
+	})
+	require.Equal(t, HostUnknown, host)
+	require.Equal(t, AuthMethod(""), auth)
+
+	// Negative: no clientInfo at all — the browser User-Agent alone must
+	// never match.
+	host, auth = d.Match(Evidence{
+		UserAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+	})
+	require.Equal(t, HostUnknown, host)
+	require.Equal(t, AuthMethod(""), auth)
+
+	// Negative: co-located stdio — Manufact Cloud is remote-only.
+	host, auth = d.Match(Evidence{
+		ClientInfo: &ClientInfo{Name: "Manufact Cloud", Version: "2"},
+		CoLocated:  true,
+	})
+	require.Equal(t, HostUnknown, host)
+	require.Equal(t, AuthMethod(""), auth)
+
+	// Negative: OpenAI tunnel — Manufact Cloud cannot use that transport.
+	host, auth = d.Match(Evidence{
+		ClientInfo:   &ClientInfo{Name: "Manufact Cloud", Version: "2"},
+		TunnelOpenAI: true,
+	})
+	require.Equal(t, HostUnknown, host)
+	require.Equal(t, AuthMethod(""), auth)
+}
+
 func TestGooseDetector_MatchByClientInfo(t *testing.T) {
 	d := gooseDetector{}
 
@@ -1884,6 +1943,37 @@ func TestDetectFromHTTPRequest_TunnelOpenAI(t *testing.T) {
 	require.Equal(t, HostChatGPT, prof.HostType)
 }
 
+func TestRegistry_Detect_ManufactOverHTTP(t *testing.T) {
+	r := NewRegistry()
+
+	req := Evidence{
+		ClientInfo:      &ClientInfo{Name: "Manufact Cloud", Version: "2", Title: "Manufact Cloud"},
+		ProtocolVersion: "2026-07-28",
+		UserAgent:       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+	}
+	prof := r.Detect(req)
+
+	require.Equal(t, HostManufact, prof.HostType)
+	require.Equal(t, TransportHTTP, prof.Transport)
+	require.Equal(t, AuthBearer, prof.AuthMethod)
+	require.True(t, prof.Remote)
+	// Mechanism features are the HTTP set, matching the observed payload.
+	require.True(t, prof.Has(FeatSourceMint))
+	require.True(t, prof.Has(FeatSinkLocal))
+	require.True(t, prof.Has(FeatSinkDrop))
+	require.True(t, prof.Has(FeatRemoteAccess))
+	// Capability features negotiated on the wire (MCP Apps extension +
+	// form/URL elicitation) are declared statically.
+	require.True(t, prof.Has(FeatMCPApps))
+	require.True(t, prof.Has(FeatElicitation))
+	require.False(t, prof.Has(FeatFileHostInput))
+	require.False(t, prof.Has(FeatSourcePath))
+	// Runtime overlay
+	require.Equal(t, "Manufact Cloud", prof.ClientInfo.Name)
+	require.Equal(t, "2", prof.ClientInfo.Version)
+	require.Equal(t, "2026-07-28", prof.ProtocolVer)
+}
+
 func TestDetectFromHTTPRequest_PassesHeaders(t *testing.T) {
 	r := NewRegistry()
 
@@ -1907,14 +1997,15 @@ func TestNewRegistry_DetectorsRegistered(t *testing.T) {
 	r := NewRegistry()
 
 	require.NotNil(t, r)
-	require.Len(t, r.detectors, 18)
+	require.Len(t, r.detectors, 19)
 	// Priority order: aider-desk, goose, devin, cline, codex, copilot-cli,
-	// fx, openai, grok, kilo, kiro, claude-code, claude (web), claude-desktop,
-	// opencode, antigravity, kimi, zed. The stdio-only detectors (aider-desk,
-	// goose, devin, cline, codex, copilot-cli, fx) run first because they do
-	// not conflict with the remote-only openai/grok/claude detectors; kilo,
-	// kiro, claude-code, opencode, antigravity, kimi and zed are the
-	// co-located stdio editors/agents.
+	// fx, openai, grok, manufact, kilo, kiro, claude-code, claude (web),
+	// claude-desktop, opencode, antigravity, kimi, zed. The stdio-only
+	// detectors (aider-desk, goose, devin, cline, codex, copilot-cli, fx) run
+	// first because they do not conflict with the remote-only detectors
+	// (openai, grok, manufact, claude web); kilo, kiro, claude-code,
+	// opencode, antigravity, kimi and zed are the co-located stdio
+	// editors/agents.
 	require.IsType(t, aiderDeskDetector{}, r.detectors[0])
 	require.IsType(t, gooseDetector{}, r.detectors[1])
 	require.IsType(t, devinDetector{}, r.detectors[2])
@@ -1924,15 +2015,16 @@ func TestNewRegistry_DetectorsRegistered(t *testing.T) {
 	require.IsType(t, fxDetector{}, r.detectors[6])
 	require.IsType(t, openAIDetector{}, r.detectors[7])
 	require.IsType(t, grokDetector{}, r.detectors[8])
-	require.IsType(t, kiloDetector{}, r.detectors[9])
-	require.IsType(t, kiroDetector{}, r.detectors[10])
-	require.IsType(t, claudeCodeDetector{}, r.detectors[11])
-	require.IsType(t, claudeDetector{}, r.detectors[12])
-	require.IsType(t, claudeDesktopDetector{}, r.detectors[13])
-	require.IsType(t, opencodeDetector{}, r.detectors[14])
-	require.IsType(t, antigravityDetector{}, r.detectors[15])
-	require.IsType(t, kimiDetector{}, r.detectors[16])
-	require.IsType(t, zedDetector{}, r.detectors[17])
+	require.IsType(t, manufactDetector{}, r.detectors[9])
+	require.IsType(t, kiloDetector{}, r.detectors[10])
+	require.IsType(t, kiroDetector{}, r.detectors[11])
+	require.IsType(t, claudeCodeDetector{}, r.detectors[12])
+	require.IsType(t, claudeDetector{}, r.detectors[13])
+	require.IsType(t, claudeDesktopDetector{}, r.detectors[14])
+	require.IsType(t, opencodeDetector{}, r.detectors[15])
+	require.IsType(t, antigravityDetector{}, r.detectors[16])
+	require.IsType(t, kimiDetector{}, r.detectors[17])
+	require.IsType(t, zedDetector{}, r.detectors[18])
 }
 
 func TestNewRegistry_PriorityOrder(t *testing.T) {
